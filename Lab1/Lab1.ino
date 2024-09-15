@@ -95,6 +95,17 @@ void loop() {
     // accelgyro.getAcceleration(&ax, &ay, &az);
     accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
+        // display tab-separated accel x/y/z values
+    Serial.print(ax); Serial.print(",");
+    Serial.print(ay); Serial.print(",");
+    Serial.print(az); Serial.print(",");
+    Serial.print(gx); Serial.print(",");
+    Serial.print(gy); Serial.print(",");
+    // Serial.print(gz); Serial.print(",");
+    Serial.println("");
+
+    delay(10);
+
     // float axReal = ax / 16384.0;  // Assuming ±2g range
     // float ayReal = ay / 16384.0;
     // float azReal = az / 16384.0;
@@ -127,18 +138,6 @@ void loop() {
     // Serial.print(formattedGx); Serial.print(",");
     // Serial.print(formattedGy); Serial.print(",");
     // Serial.print(formattedGz); Serial.println("");
-    
-
-    // display tab-separated accel x/y/z values
-    Serial.print(ax); Serial.print(",");
-    Serial.print(ay); Serial.print(",");
-    Serial.print(az); Serial.print(",");
-    // Serial.print(gx); Serial.print(",");
-    // Serial.print(gy); Serial.print(",");
-    // Serial.print(gz); Serial.print(",");
-    Serial.println("");
-
-    delay(10);
 
     // // Convert raw accelerations to m/s²
     // ax_mss = (ax / ACCEL_SCALE) * GRAVITY;
