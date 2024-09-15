@@ -7,7 +7,9 @@ import math
 from collections import deque
 import threading
 
-GRAVITY = 9.81  # Standard gravity value in m/s^2
+WINDOW_SIZE = 19
+ACC_THRESHOLD = 0.001
+GYRO_THRESHOLD = 0.001
 
 acc_div = 16384.0
 accx_offset = 0.230
@@ -33,6 +35,11 @@ previous_roll = 0
 previous_pitch = 0
 #####################################
 
+velocityx = 0.0
+velocityy = 0.0
+displacementx = 0.0
+displacementy = 0.0
+
 data_lock = threading.Lock()
 
 Data = serial.Serial('COM9', 57600, timeout=0.01)
@@ -56,6 +63,7 @@ curve3 = fig1.plot()
 
 # Deques for storing data
 data = [deque(maxlen=xLength) for _ in range(5)]
+stationary_data = [[0] * WINDOW_SIZE for _ in range(5)]
 
 running_averages = [0] * 5  # Store the running averages for each deque
 
@@ -63,47 +71,53 @@ running_averages = [0] * 5  # Store the running averages for each deque
 def low_pass_filter(new_value, prev_filtered_value, alpha):
     """Applies low-pass filter to a signal."""
     return alpha * new_value + (1 - alpha) * prev_filtered_value
+
+def detect_stationary_accel(data, threshold=ACC_THRESHOLD):
+    # Ensure that each accelerometer deque has at least 50 elements
+    if any(len(data[i]) < WINDOW_SIZE for i in range(3)):  # accX, accY, accZ
+        return False  # Not enough data to check
+    
+    # Slice the latest WINDOW_SIZE values from accX, accY, and accZ deques
+    accX_window = list(data[0])[-WINDOW_SIZE:]
+    accY_window = list(data[1])[-WINDOW_SIZE:]
+    accZ_window = list(data[2])[-WINDOW_SIZE:]
+    
+    # Stack the latest values for the three axes into a NumPy array
+    accel_window = np.column_stack((accX_window, accY_window, accZ_window))
+    
+    # Calculate the standard deviation for each axis
+    accel_var = np.var(accel_window, axis=0)
+    print(accel_var)
+    
+    # Return True if the std deviation is below the threshold for all axes
+    return np.all(accel_var < threshold)
 ##############################
 
 ########## ONLY FOR PART B ##########
-# Function to calculate roll and pitch from accelerometer data
-def accel_angles(accel_x, accel_y, accel_z):
-    # Roll is the angle between the y-axis and gravity (in the x-z plane)
-    accel_roll = math.atan2(accel_y, accel_z) * (180 / math.pi)
+def detect_stationary_accel_gyro(data, recent_data, accel_threshold=ACC_THRESHOLD, gyro_threshold=GYRO_THRESHOLD):
+    # Ensure that each accelerometer and gyroscope deque has at least 50 elements
+    if any(len(data[i]) < WINDOW_SIZE for i in range(5)):  # accX, accY, accZ, gyroX, gyroY
+        return False  # Not enough data to check
     
-    # Pitch is the angle between the x-axis and gravity (in the y-z plane)
-    accel_pitch = math.atan2(-accel_x, math.sqrt(accel_y**2 + accel_z**2)) * (180 / math.pi)
+    # Slice the latest WINDOW_SIZE values from each deque
+    accX_window = list(data[0])[-WINDOW_SIZE:] + [recent_data[0]]
+    accY_window = list(data[1])[-WINDOW_SIZE:] + [recent_data[1]]
+    accZ_window = list(data[2])[-WINDOW_SIZE:] + [recent_data[2]]
+    gyroX_window = list(data[3])[-WINDOW_SIZE:] + [recent_data[3]]
+    gyroY_window = list(data[4])[-WINDOW_SIZE:] + [recent_data[4]]
     
-    return accel_roll, accel_pitch
-
-# Complementary filter to calculate roll and pitch
-def complementary_filter(gyro_x, gyro_y, accel_x, accel_y, accel_z, roll_prev, pitch_prev, alpha, dt):
-    # Calculate roll and pitch angles from accelerometer data
-    accel_roll, accel_pitch = accel_angles(accel_x, accel_y, accel_z)
-
-    # Calculate roll and pitch angles from gyroscope data (integrating angular velocity)
-    roll_gyro = roll_prev + gyro_x * dt
-    pitch_gyro = pitch_prev + gyro_y * dt
-
-    # Apply complementary filter: combine gyro and accelerometer data
-    roll = alpha * roll_gyro + (1 - alpha) * accel_roll
-    pitch = alpha * pitch_gyro + (1 - alpha) * accel_pitch
-
-    return roll, pitch
-
-# Remove gravity component from accelerometer readings
-def remove_gravity(accel_x, accel_y, accel_z, roll, pitch):
-    # Calculate the gravity vector based on the current roll and pitch
-    gravity_x = math.sin(math.radians(pitch))
-    gravity_y = -math.sin(math.radians(roll)) * math.cos(math.radians(pitch))
-    gravity_z = math.cos(math.radians(roll)) * math.cos(math.radians(pitch))
-
-    # Subtract the gravity vector from the raw accelerometer readings
-    linear_accel_x = accel_x - gravity_x
-    linear_accel_y = accel_y - gravity_y
-    linear_accel_z = accel_z - gravity_z
-
-    return linear_accel_x, linear_accel_y, linear_accel_z
+    # Stack the latest values for the three accelerometer axes into a NumPy array
+    accel_window = np.column_stack((accX_window, accY_window, accZ_window))
+    # Stack the latest values for the two gyroscope axes into a NumPy array
+    gyro_window = np.column_stack((gyroX_window, gyroY_window))
+    
+    # Calculate the standard deviation for each axis
+    accel_var = np.var(accel_window, axis=0)
+    gyro_var = np.var(gyro_window, axis=0)
+    print(f"Accel_var: {accel_var}, Gyro_var: {gyro_var}, result: {np.all(accel_var > accel_threshold) and np.all(gyro_var > gyro_threshold)}")
+    
+    # Return True if both accelerometer and gyroscope variance are below their respective thresholds
+    return np.all(accel_var > accel_threshold) and np.all(gyro_var > gyro_threshold)
 #####################################
 
 def update_running_average(index, new_value):
@@ -130,6 +144,7 @@ def canFloat(data):
         return False
 
 def dataProcess(signal):
+    global data
     global prev_acc # Access previous filtered values PART A
     global previous_roll, previous_pitch # Access previous roll and pitch values PART B
     signal = signal.strip()  # Remove any leading/trailing whitespace
@@ -160,7 +175,7 @@ def dataProcess(signal):
         # gyro_z = dataSet[5] / gyro_div - gyroz_offset
 
         ############## FOR PART A ################
-        # Apply low-pass filter to accelerometer data
+        # # Apply low-pass filter to accelerometer data
         # accel_x = low_pass_filter(accel_x, prev_acc[0], alpha)
         # accel_y = low_pass_filter(accel_y, prev_acc[1], alpha)
         # accel_z = low_pass_filter(accel_z, prev_acc[2], alpha)
@@ -196,7 +211,14 @@ def dataProcess(signal):
         a_x = accel_x - offset_accx
         a_y = accel_y - offset_accy
         a_z = accel_z - offset_accz
-        return [a_x, a_y, a_z, gyro_x, gyro_y]
+
+        new_data = [a_x, a_y, a_z, gyro_x, gyro_y]
+        print(f"New data: {new_data}")
+        ############## CHEAT CODE ################
+        if not detect_stationary_accel_gyro(data, new_data):
+            return [0, 0, 0, 0, 0]
+
+        return new_data
     
     # else: # Return Averages if data is corrupted
     #     return get_similar_values()
@@ -204,12 +226,21 @@ def dataProcess(signal):
 ##################### Thread to read data from serial port ####################
 def readData():
     global signal
+    global velocityx, velocityy, displacementx, displacementy
     while True:
         try:
             signal = Data.readline().decode('utf-8').strip()
             signal = dataProcess(signal)
-            print(signal)
             if signal:
+                # print(f"Signal: {signal}")
+
+                # Integrate acceleration to get velocity
+                # velocityx += signal[0] * dt
+                # velocityy += signal[1] * dt
+                # # Integrate velocity to get displacement
+                # displacementx += velocityx * dt
+                # displacementy += velocityy * dt
+                # print(f"X: {displacementx}, Y: {displacementy}")
                 with data_lock:
                     for i in range(len(data)):
                         data[i].append(signal[i])
@@ -229,6 +260,7 @@ def plotData():
     curve1.setData(list(data[0]), pen=pg.mkPen('g', width=2))
     curve2.setData(list(data[1]), pen=pg.mkPen('r', width=2))
     curve3.setData(list(data[2]), pen=pg.mkPen('b', width=2))
+
 ##############################################################################
 
 
